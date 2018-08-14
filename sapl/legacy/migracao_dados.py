@@ -141,10 +141,6 @@ models_novos_para_antigos = {
     for model in field_renames}
 models_novos_para_antigos[Composicao] = models_novos_para_antigos[Participacao]
 
-content_types = {model: ContentType.objects.get(
-    app_label=model._meta.app_label, model=model._meta.model_name)
-    for model in field_renames}
-
 campos_novos_para_antigos = {
     model._meta.get_field(nome_novo): nome_antigo
     for model, renames in field_renames.items()
@@ -808,7 +804,7 @@ def roda_comando_shell(cmd):
     assert res == 0, 'O comando falhou: {}'.format(cmd)
 
 
-def migrar_dados():
+def migrar_dados(apagar_do_legado=False):
     try:
         ocorrencias.clear()
         ocorrencias.default_factory = list
@@ -840,7 +836,7 @@ def migrar_dados():
         fill_vinculo_norma_juridica()
         fill_dados_basicos()
         info('Começando migração: ...')
-        migrar_todos_os_models()
+        migrar_todos_os_models(apagar_do_legado)
     except Exception as e:
         ocorrencias['traceback'] = str(traceback.format_exc())
         raise e
@@ -890,12 +886,12 @@ def get_models_a_migrar():
     return models
 
 
-def migrar_todos_os_models():
+def migrar_todos_os_models(apagar_do_legado):
     for model in get_models_a_migrar():
-        migrar_model(model)
+        migrar_model(model, apagar_do_legado)
 
 
-def migrar_model(model):
+def migrar_model(model, apagar_do_legado):
     print('Migrando %s...' % model.__name__)
 
     model_legado, tabela_legado, campos_pk_legado = \
@@ -949,12 +945,13 @@ def migrar_model(model):
                 novos.append(new)  # guarda para salvar
 
                 # acumula deleção do registro no legado
-                sql_delete_legado += 'delete from {} where {};\n'.format(
-                    tabela_legado,
-                    ' and '.join(
-                        '{} = "{}"'.format(campo,
-                                           getattr(old, campo))
-                        for campo in campos_pk_legado))
+                if apagar_do_legado:
+                    sql_delete_legado += 'delete from {} where {};\n'.format(
+                        tabela_legado,
+                        ' and '.join(
+                            '{} = "{}"'.format(campo,
+                                               getattr(old, campo))
+                            for campo in campos_pk_legado))
 
         # salva novos registros
         with reversion.create_revision():
@@ -973,7 +970,7 @@ def migrar_model(model):
             reinicia_sequence(model, ultima_pk_legado + 1)
 
         # apaga registros migrados do legado
-        if sql_delete_legado:
+        if apagar_do_legado and sql_delete_legado:
             exec_legado(sql_delete_legado)
 
 
@@ -1156,7 +1153,9 @@ def adjust_tipoafastamento(new, old):
 
 
 def set_generic_fk(new, campo_virtual, old):
-    new.content_type = content_types[campo_virtual.related_model]
+    model = campo_virtual.related_model
+    new.content_type = ContentType.objects.get(
+        app_label=model._meta.app_label, model=model._meta.model_name)
     new.object_id = get_fk_related(campo_virtual, old)
 
 
